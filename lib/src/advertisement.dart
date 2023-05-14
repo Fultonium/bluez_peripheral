@@ -80,6 +80,7 @@ class Advertisement extends DBusObject {
 
 class AdvertisingManager extends DBusRemoteObject {
   static const _interface = "org.bluez.LEAdvertisingManager1";
+  Advertisement? _advertisement;
 
   AdvertisingManager(
     super.client,
@@ -92,10 +93,21 @@ class AdvertisingManager extends DBusRemoteObject {
         advertisement.path,
         DBusDict(DBusSignature("s"), DBusSignature("v"))
       ]);
+      _advertisement = advertisement;
     } catch (e) {
       print(e);
     } finally {
       await client.unregisterObject(advertisement);
     }
+  }
+
+  Future<void> unregisterAdvertisement() async {
+    if (_advertisement == null) {
+      return;
+    }
+
+    await super.callMethod(
+        _interface, "UnregisterAdvertisement", [_advertisement!.path]);
+    _advertisement = null;
   }
 }

@@ -77,6 +77,7 @@ class LocalGattCharacteristic extends DBusObject {
   String serviceUuid;
   List<CharacteristicOptionFlag> flags;
   int mtu;
+  bool dynamicLength;
 
   LocalGattService? service;
 
@@ -85,8 +86,11 @@ class LocalGattCharacteristic extends DBusObject {
     required this.serviceUuid,
     this.flags = const [CharacteristicOptionFlag.read],
     this.mtu = 2,
+    this.dynamicLength = false,
   }) : super(DBusObjectPath(
-            "$_gattRoot/${serviceUuid.replaceAll(r'-', "_")}/${uuid.replaceAll(r'-', "_")}"));
+            "$_gattRoot/${serviceUuid.replaceAll(r'-', "_")}/${uuid.replaceAll(r'-', "_")}")) {
+    this._value = List.filled(this.mtu, 0);
+  }
 
   @override
   Map<String, Map<String, DBusValue>> get interfacesAndProperties => {
@@ -126,14 +130,21 @@ class LocalGattCharacteristic extends DBusObject {
 
   Future<DBusMethodResponse> _readValue(DBusDict flags) async {
     print("Read characteristic $uuid");
-    return DBusMethodSuccessResponse([DBusArray.byte(_value)]);
+
+    var toReturn = _value;
+    if (dynamicLength) {
+      toReturn.addAll(List.filled(this.mtu - _value.length, 0));
+    }
+    return DBusMethodSuccessResponse([DBusArray.byte(toReturn)]);
   }
 
   Future<DBusMethodResponse> _writeValue(
       DBusArray value, DBusDict flags) async {
-    print("Wrote characteristic $uuid $flags");
+    print("Wrote characteristic $uuid");
     _value = value.asByteArray().toList();
-    print(flags);
+    if (_value.length > mtu) {
+      _value = _value.sublist(0, mtu);
+    }
     return DBusMethodSuccessResponse();
   }
 
@@ -150,24 +161,81 @@ class LocalGattCharacteristic extends DBusObject {
 
 class GattManager extends DBusRemoteObject {
   static const String _interface = "org.bluez.GattManager1";
+  static bool _registered = false;
+  List<LocalGattService> _services = [];
+  DBusObject? _root;
 
   GattManager(
     super.client,
   ) : super(name: "org.bluez", path: DBusObjectPath("/org/bluez/hci0"));
 
   Future<void> registerApplication(List<LocalGattService> services) async {
-    for (var s in services) {
-      await client.registerObject(s);
+    try {
+      for (var s in services) {
+        await client.registerObject(s);
+        for (var c in s.characteristics) {
+          await client.registerObject(c);
+        }
+      }
+
+      _root = DBusObject(DBusObjectPath(_gattRoot), isObjectManager: true);
+      await client.registerObject(_root!);
+      await callMethod(_interface, "RegisterApplication", [
+        DBusObjectPath(_gattRoot),
+        DBusDict(DBusSignature("s"), DBusSignature("v"))
+      ]);
+
+      _registered = true;
+      _services = List.from(services);
+    } catch (e, s) {
+      print(e);
+      print(s);
+    }
+  }
+
+  Future<void> unregisterApplication() async {
+    if (!_registered) {
+      return;
+    }
+
+    await callMethod(
+        _interface, "UnregisterApplication", [DBusObjectPath(_gattRoot)]);
+
+    for (var s in _services) {
       for (var c in s.characteristics) {
-        await client.registerObject(c);
+        await client.unregisterObject(c);
+      }
+      await client.unregisterObject(s);
+    }
+    await client.unregisterObject(_root!);
+
+    _registered = false;
+    _services = [];
+    _root = null;
+  }
+}
+
+extension ServiceListExtension on Iterable<LocalGattService> {
+  LocalGattCharacteristic? findCharacteristic(
+      String serviceUuid, String characteristicUuid) {
+    LocalGattService? service;
+
+    for (var s in this) {
+      if (s.uuid == serviceUuid) {
+        service = s;
+        break;
+      }
+    }
+    if (service == null) {
+      return null;
+    }
+
+    for (var c in service.characteristics) {
+      if (c.uuid == characteristicUuid) {
+        return c;
       }
     }
 
-    await client.registerObject(
-        DBusObject(DBusObjectPath(_gattRoot), isObjectManager: true));
-    await callMethod(_interface, "RegisterApplication", [
-      DBusObjectPath(_gattRoot),
-      DBusDict(DBusSignature("s"), DBusSignature("v"))
-    ]);
+    return null;
   }
 }
