@@ -1,8 +1,4 @@
-/// Support for doing something awesome.
-///
-/// More dartdocs go here.
 library;
 
-export 'src/bluez_peripheral_base.dart';
-
-// TODO: Export any libraries intended for clients of this package.
+export 'src/advertisement.dart';
+export 'src/gatt.dart';
